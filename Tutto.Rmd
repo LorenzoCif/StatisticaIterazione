@@ -1,0 +1,722 @@
+---
+lang: it-IT
+output:
+  bookdown::pdf_document2: default
+fontsize: 12pt
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, echo = FALSE)
+```
+
+```{r Librerie, include=FALSE}
+setwd("C:/Users/gianm/Desktop/University/Magistrale/2ndo anno/5-Statistica Iterazione/Progetto/Report")
+
+library(knitr)
+library(gamlss)
+library(VGAM)
+library(tidyverse)
+library(tinytex)
+
+```
+
+\newpage
+
+# Introduzione
+
+## Descrizione del problema
+
+I dati sono stati raccolti in una azienda che produce condensatori elettrolitici in alluminio (Aluminum Electrolytic Capacitor, AEC). Si tratta di una produzione di massa. In particolare, in ogni ciclo di produzione vengono prodotti migliaia di pezzi. Il processo di produzione richiede 4 fasi che devono essere svolte in sequenza e che possiamo indicare con il loro nome inglese, ovvero:
+
+  * Rolling
+  * Soaking
+  * Assemly
+  * Cleaning
+  
+Ognuna delle quattro fasi può introdurre dei difetti sia funzionali che estetici.
+
+Per ogni ciclo di produzione, 200 condensatori sono scelti casualmente alla fine di ogni fase e classificati come difettosi o meno. Il file _AEC.dat_, di cui di seguito si presenta un estratto, contiene per 1180 cicli di produzione il numero totale di pezzi difettosi trovato in ogni fase.
+
+```{r Carico il dataset}
+
+data <- read.table("AEC.dat", header=TRUE)
+data2 <- data
+data2$id <- 1:nrow(data)
+long.data <- data2 %>% pivot_longer(cols=!id, names_to = "Fase", values_to = "y")
+long.data$Fase <- as.factor(long.data$Fase)
+
+kable(head(data), "simple")
+```
+
+## Obiettivi
+
+Il primo obiettivo è costruire un modello che racconti come la probabilità di essere difettoso si evolve da fase a fase.
+
+Un obiettivo secondario, ma importante, è anche capire come sia possibile stimare la difettosità finale di un ciclo di produzione (ovvero quella rilevata direttamente dopo la fase di _Cleaning_) utilizzando tutte e 4 le misure (e se ne vale la pena).
+
+Osservazioni aggiuntive: <br />
+
+  1. I pezzi trovati difettosi durante il controllo sono eliminati. Nonostante questo gli ingegneri responsabili della produzione sono fortemente convinti che la probabilità di essere difettoso cresce da fase a fase per ogni ciclo di produzione. Ovvero, ogni fase (incluso il controllo–eliminazione difettosi trovati) aggiunge difetti, non li cura. Dato che i 200 pezzi ispezionati sono differenti da fase a fase questa monotonia può non essere rispettata dai dati.
+  
+  2. Sempre secondo gli ingegneri responsabili della produzione ci sono dei fattori stocastici non da loro controllabili che “affliggono” i differenti cicli di produzione. La probabilità di essere difettoso dovrebbe quindi essere non solo differente da fase a fase ma anche da ciclo a ciclo. Dopo qualche analisi preliminare potrebbe essere utile verificare anche in maniera pi`u o meno formale questo aspetto.
+
+
+\newpage
+# Parte 1 - Analisi descrittiva 
+
+## Indici riassuntivi
+
+In prima istanza, si riportano media e varianza del numero di condensatori difettosi per ogni fase.
+
+```{r Media & Varianza fasi }
+fasi <- c("Rolling", "Soaking", "Assembly", "Cleaning")
+tabella <- data.frame(Media = colMeans(data), Varianza = apply(data, 2, var))
+rownames(tabella) <- fasi
+kable(tabella, "simple")
+```
+
+Emerge come entrambi gli indici crescano da fase da fase, specialmente evidenziando un salto tra la seconda (_Soaking_) e la terza (_Assembly_).
+Le stesse caratteristiche si possono notare dalla figura seguente, dove vengono riportati i boxplot per le 4 fasi. Inoltre si evidenzia che per l'ultima fase ci siano molti valori estremi (una probabile indicazione che la quarta fase sia quella più critica della produzione). <br>
+```{r boxplot, fig.pos='H', fig.height=4.5, fig.width=8}
+boxplot(data)
+```
+<br>
+Queste informazioni ci portano a ritenere sensata l'ipotesi degli ingegneri su un possibile aumento della probabilità di difettosità da fase a fase.
+
+## Studio degli andamenti 
+Successivamente si è indagato la presenza di comportamenti ricorrenti tra le fasi. 
+Per esplorare questo aspetto si sono rappresentati graficamente 100 cicli di produzione selezionati casualmente tra quelli con valori al di sopra del 85° quantile per ogni fase. Sono stati considerati tali valori perché ritenuti problematici dal punto di vista del processo produttivo. Inoltre, viene anche segnato la mediana di ogni fase con un asterisco rosso.
+
+```{r Andamento Cicli Critici, fig.height=8}
+set.seed(1)
+par(mfrow=c(2,2))
+# Fase 1 #
+q=0.9
+sub_data1 <- data[which(between(data[,1], quantile(data[,1],q), max(data[,1]))),]
+sub1 <- sample(1:nrow(sub_data1), 100)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="n difettosi",
+        main="ROLLING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data1[sub1,]), type = "l", lty=1, lwd=1)
+points(1:4,apply(data,2,median),cex=4,pch="*",col=2)
+
+
+# Fase 2 #
+sub_data2 <- data[which(between(data[,2], quantile(data[,2],q), max(data[,2]))),]
+sub2 <- sample(1:nrow(sub_data2), 100)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="n difettosi",
+        main="SOAKING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data2[sub2,]), type = "l", lty=1, lwd=1)
+points(1:4,apply(data,2,median),cex=4,pch="*",col=2)
+
+# Fase 3 #
+sub_data3 <- data[which(between(data[,3], quantile(data[,3],q), max(data[,3]))),]
+sub3 <- sample(1:nrow(sub_data3), 100)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="n difettosi",
+        main="ASSEMBLY")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data3[sub3,]), type = "l", lty=1, lwd=1)
+points(1:4,apply(data,2,median),cex=4,pch="*",col=2)
+# Fase 4 #
+sub_data4 <- data[which(between(data[,4], quantile(data[,4],q), max(data[,4]))),]
+sub4 <- sample(1:nrow(sub_data4), 100)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="n difettosi",
+        main="CLEANING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data4[sub4,]), type = "l", lty=1, lwd=1)
+points(1:4,apply(data,2,median),cex=4,pch="*",col=2)
+```
+
+Dalla figura si evince che un numero elevato di pezzi difettosi, nelle prime due fasi, non ha andamenti evidenti nelle fasi successive se non per un valore leggermente al di sopra delle rispettive mediane. Similmente, i valori più elevati in fase di Assembly tendono ad essere al di sopra della mediana anche in Cleaning. Infine, i cicli con un maggior numero di difettosi in Cleaning presentano un salto elevato rispetto alla fase precedente.
+
+## Distribuzione Marginale 
+
+Nel determinare quale modello probabilistico sia più adatto a descrivere il fenomeno, si sono studiate le distribuzioni marginali delle 4 fasi. Nella figura successiva vengono confrontate le distribuzioni osservate con quella di una distribuzione binomiale con media pari alla media campionaria. Mentre per le fasi 1 e 2 la distribuzioni binomiale sembra adeguata, per le fasi 3 e 4 si nota uno forte scostamento. Questo indica come dalla fase 2 alle fase 3 il cambiamento non coinvolge solamente il parametro di posizione, ma l'intera distribuzione.
+
+```{r Distribuzioni marginali, fig.width=10, fig.height=8.5}
+par(mfrow=c(2,2))
+plot(table(data[,1])/nrow(data), type = "o", main="Rolling", ylab="")
+points(0:12,dbinom(0:12, 200,mean(data[,1])/200), col=2, type  = "o")
+legend("topright", legend = c("Fase 1", "Binomiale"), lty = 1, col = c(1,2))
+
+plot(table(data[,2])/nrow(data), type = "o", ylim=c(0,0.3), main="Soaking", ylab="")
+points(0:13,dbinom(0:13, 200,mean(data[,2])/200), col=2, type  = "o")
+legend("topright", legend = c("Fase 2", "Binomiale"), lty = 1, col = c(1,2))
+
+plot(table(data[,3])/nrow(data), type = "o", ylim=c(0,0.2), main="Assembly", ylab="")
+points(0:26,dbinom(0:26, 200,mean(data[,3])/200), col=2, type  = "o")
+legend("topright", legend = c("Fase 3", "Binomiale"), lty = 1, col = c(1,2))
+
+plot(table(data[,4])/nrow(data), type = "o", ylim=c(0,0.2), main = "Cleaning", ylab="")
+points(0:35,dbinom(0:35, 200,mean(data[,4])/200), col=2, type  = "o")
+legend("topright", legend = c("Fase 4", "Binomiale"), lty = 1, col = c(1,2))
+par(mfrow=c(1,1))
+```
+
+Alla luce di questo risultato, si è stimato il parametro di dispersione attraverso il metodo dei momenti (vedasi Appendice C). Si ottiene che la distribuzione delle fasi 3 e 4 hanno rispettivamente una varianza 2.16 e 2.64 volte quella di una distribuzione binomiale, che ci conferma il forte scostamento annunciato in precedenza.
+
+## Dipendenza
+
+Infine si è analizzata la struttura di dipendenza tra le 4 fasi.
+
+```{r Dipendenza 1, fig.width=8}
+pairs(data)
+```
+
+Dalla figura precedente non si nota un' evidente struttura di correlazione.
+Questo risulta contro-intuitivo rispetto alla natura del problema: ci si aspetta infatti che il numero di difettosi cresca o rimanga uguale da fase a fase. Tale dinamica deriva dal campionamento, infatti ad ogni fase i 200 pezzi estratti vengono distrutti e i pezzi raccolti nella fase successiva sono nuovi. Si può quindi ottenere un numero di difettosi nella fase succesiva anche minore.
+
+## Concetti fondamentali individuati
+In conclusione, si evidenziano i seguenti aspetti riscontrati:
+
+* presenza di un aumento di difettosi rilevati dal passaggio da una fase all'altra, specialmente tra la seconda e la terza si evidenzia un salto;
+* presenza di sovradispersione crescente;
+* la distribuzione beta-binomiale risulta la distribuzione più adatta
+* correlazione lineare piu evidente tra la terza e quarta fase
+
+
+\newpage
+# Parte 2 - Modellazione
+## Modello anova
+In prima istanza si è verificato che le medie e le varianze del numero di difettosi nella 4 fasi siano significatemente diverse tra di loro. Si è quindi stimato un modello anova assumendo, alla luce dei risultati ottenute dell'analisi esplorativa sulle distribuzioni marginali, una distribuzione Beta-Binomiale per il numero di difettosi. Posto $Y_{ij}$ il numero di difettosi nel ciclo i-esimo nella fase j-esima, il modello che ne consegue è il seguente:
+\[
+\begin{aligned}
+Y_{ij} &\sim BetaBin(200, p_j, \psi_j) \\
+p_j  &=  logit^{-1}(\beta_0 + \beta_1 I(j=1) + \beta_2 I(j=2) + \beta_3 I(j=4)) \\
+\psi_j &= logit^{-1}(\gamma_0 + \gamma_1 I(j=1) + \gamma_2 I(j=2) + \gamma_3 I(j=4)) \\
+\end{aligned}
+\]
+
+per i=1,...,1180, j=1,..4.
+
+```{r modello-anova, include=FALSE}
+m.anova <- vglm(cbind(y,200-y) ~ Fase, family = betabinomial(zero=0), data=long.data)
+summary(m.anova)
+```
+
+Dal modello risulta un effetto significativo delle varie fasi di produzione sia nel probabilità del numero di difetti che nella varianza. Si riportano di seguito le stime delle probabilità e della varianza stimate per ciascuna fase.
+
+```{r tabellastime}
+Probab <- predictvglm(m.anova,type="response",newdata=data.frame(Fase=c("Rolling","Soaking","Assembly","Cleaning")))
+Probab <- round(Probab,3)
+coeff  <- coef(m.anova)
+Disp <- c(plogis(coeff[2]+coeff[6]),plogis(coeff[2]+coeff[8]),plogis(coeff[2]),plogis(coeff[2]+coeff[4]))
+Devst <- Probab*(1-Probab)*200*(1+Disp*199)
+Devst <- round(sqrt(Devst),3)
+
+tabella <-cbind(Probab,Devst)
+rownames(tabella) <- c("Rolling","Soaking","Assembly","Cleaning")
+colnames(tabella) <- c("Prob.","Dev. st.")
+kable(tabella, "simple")
+```
+
+Si nota che la probabilità di difettosità stimata aumenta di fase in fase raggiungendo il massimo nella fase di Cleaning. Tale  probabilità rimane comunque sempre al di sotto del 5%. Anche la variabilità segue lo stesso andamento come già dedotto dalle analisi esplorative.
+
+
+## Modellazione della relazioni tra fasi
+Per studiare le relazioni tra i difettosi nelle 4 fasi, si è scelto di propendere per un procedimento sequenziale, ossia
+si è modellata la probabilità di guasto di una fase sfruttando solo le fasi ad essa antecedenti, tenendo anche conto della sovradispersione.
+Nello specifico, sono stati definiti i seguenti modelli di regressione assumendo un modello Beta-Binomiale:
+
+1) variabile risposta gli _n_ difettosi in Soaking e variabile esplicativa _n_ difettosi in Rolling 
+2) variabile risposta gli _n_ difettosi in Assembly e variabili esplicative il numero _n_ di difettosi in Soaking e Rolling
+3) variabile risposta gli _n_ difettosi in Cleaning e variabili esplicative il numero _n_ di difettosi in Assembly, Soaking, Rolling. <br>
+
+Formalmente il modello assume la seguente struttura:
+
+\begin{equation*}
+Y_{ij} \sim BetaBin(\pi_j,e^\phi_j)
+\end{equation*}
+\begin{equation*}
+\pi_j=g^{-1}(\beta_{0}+\sum_{p=1}^{j-1}{\beta_{p}Y_{ip}})
+\end{equation*}
+
+con j=2,3,4; $g(\cdot)$ funzione di legame $logit$ e $\phi_j$ parametri di dispersione. 
+ 
+```{r modelli, include=FALSE}
+# m1 #
+m1.1=gamlss(cbind(Soaking,200-Soaking)~Rolling, sigma.formula = ~Rolling, family=BB, data=data)
+m1.2=stepGAIC(m1.1,what="sigma",direction = "backward")
+coeff1 <- summary(m1.2)[1:2,]
+# m2 #
+set.seed(8)
+m2.1=gamlss(cbind(Assembly,200-Assembly)~Rolling+Soaking,sigma.formula = ~Rolling,family=BB,data=data)
+m2.2=stepGAIC(m2.1,what="sigma")
+coeff2 <- summary(m2.2)[1:3,]
+# m3 #
+m3.1=gamlss(cbind(Cleaning,200-Cleaning)~Rolling+Soaking+Assembly,sigma.formula = ~Rolling,family=BB,data=data)
+m3.2=stepGAIC(m3.1,what="sigma")
+coeff3 <- summary(m3.2)[1:4,]
+```
+
+Iniziando dal primo modello, denominato _m1_ la stima mostra come il numero di difettosi della fase di Rolling risulti significativo nel prevedere la medesima quantità nella seconda fase. In particolare ad un aumento unitario in termini di difettosi per la prima fase corrisponde un aumento della probabilità di difettosità per la seconda fase pari al $5.9\%$.
+
+```{r coeff1}
+rownames(coeff1) <- c("Intercetta","Rolling")
+colnames(coeff1) <- c("Stima","Std. Error","t value","p-value")
+kable(round(coeff1,3),"simple",caption = "Stime dei coefficienti del predittore lineare per il modello M1")
+```
+
+
+
+Si è effettuata un'analisi dei residui allo scopo di verificare la bontà del modello.
+
+Il pacchetto utilizzato per implementare il modello beta-binomiale sfrutta una particolare tipologia di residui chiamati residui-quantile (Dunn e Smyth, 1996) utile in condizione di sovradispersione.
+Questi residui sono, per risposte con distribuzione continua, definiti come
+
+\begin{equation}
+r_i=\Phi^{-1}(F(y_i;\hat{\theta}))
+\end{equation}
+
+dove $F(y_i;\theta)$ è la funzione di ripartizione della risposta e $\Phi^{-1}(\cdot)$ è l'inversa della funzione di ripartizione della normale standard. Se il modello è correttamente specificato i residui avranno distribuzione approssimata normale standard.
+Per variabili risposta discrete, a tale definizione si aggiunge una perturbazione casuale.<br>
+
+```{r res, fig.cap="Q-Q plot dei 3 modelli beta-binomiali.", , fig.height=6}
+layout(matrix(c(1,2,3,3), 2, 2, byrow = TRUE))
+# res m1 #
+qqnorm(m1.2$residuals, main = "Q-Q plot per m1")
+qqline(m1.2$residuals, col=2)
+
+# res m2 #
+qqnorm(m2.2$residuals, main = "Q-Q plot per m2")
+qqline(m2.2$residuals, col=2)
+
+# res m3 #
+qqnorm(m3.2$residuals, main = "Q-Q plot per m3")
+qqline(m3.2$residuals, col=2)
+par(mfrow=c(1,1))
+```
+
+Dall'analisi dei residui presente in Figura \@ref(fig:res) relativo a _m1_ si può notare come questo modello appaia correttamente specificato. Anche il test di Shapiro-Wilk conduce a non rifiutare l'ipotesi di normalità.
+
+Proseguendo con il secondo modello si evince come il numero di difetti della fase Rolling risulti significativo nel prevedere il numero di difetti della fase di Assembly. 
+
+In particolare ad un aumento unitario in termini di difettosi per la prima fase corrisponde un aumento della  probabilità di essere difettoso per la terza fase pari al $6.4\%$.
+Anche l'effetto della fase di Soaking risulta significativo, e in particolare presenta un effetto che comporta un aumento della probabilità di difettosità per la terza fase pari al $6.9\%$.
+
+
+```{r coeff2}
+rownames(coeff2) <- c("Intercetta","Rolling","Soaking")
+colnames(coeff2) <- c("Stima","Std. Error","t value","p-value")
+kable(round(coeff2,3),"simple",caption = "Stime dei coefficienti del predittore lineare per il modello M2")
+```
+
+Per quanto riguarda i residui del modello _m2_, sempre in riferimento alla Figura \@ref(fig:res), il qqplot suggerisce un buon adattamento, confermato anche dal test di Shapiro-Wilk.
+
+Infine, anche per il terzo modello (chiamato _m3_) si ottiene che il numero di difettosi delle tre fasi precedenti sia significativo nel prevedere il numero di difettosi della fase di Assembly. Nello specifico, con la medesima interpretazione dei modelli precedenti, le fasi antecedenti hanno un effetto sulla probabilità di difettosità dell'ultima fase pari al $3.5\%$, $3.2\%$ e $5.2\%$ , in ordine dalla prima alla terza.
+
+
+```{r coeff3}
+rownames(coeff3) <- c("Intercetta","Rolling","Soaking","Assembly")
+colnames(coeff3) <- c("Stima","Std. Error","t value","p-value")
+kable(round(coeff3,3),"simple",caption = "Stime dei coefficienti del predittore lineare per il modello M3")
+```
+
+Tuttavia per questo modello, l'analisi dei residui riportati in Figura \@ref(fig:res), mostra un allontanamento dalle ipotesi distributive, nello specifico si nota che la coda destra si discosta dai valori di riferimento della normale standard . In aggiunta il test di Shapiro-Wilk porta al rifiuto dell'ipotesi nulla. <br>
+
+Sia per il modello 2 che per il 3 si è valutato l'inserimento di interazioni significative tramite una procedura _stepwise_ con criterio di penalizzazione AIC, tuttavia in entrambi i casi non sono stati apportati cambiamenti ai modelli.
+Per gli stessi modelli il termine relativo alla varianza è risultato significativo ad evidenza della necessità di passare dal modello binomiale al beta-binomiale.
+
+Succesivamente si sono analizzate i cicli che il modello non riesce a prevedere in modo adeguato. Si riporta il loro andamento tra le 4 fasi nella seguente figura:
+
+```{r grafico, fig.height=4}
+matplot(t(data),col="gray",type="l", ylab="Numero Difettosi", xlab="")
+matlines(t(data[which(resid(m3.2)>2),]),lwd=2,lty=1)
+```
+
+E' evidente un comportamento comune che si manifesta nel numero molto elevato di difetti nell'ultima fase rispetto alla terza. Questo suggerisce la presenza di sottopopolazioni di cicli caratterizzati da andamenti differenti probabilmente dovuti a fattori stocastici non misurati.
+Di conseguenza è sembrato adeguato effettuare un raggruppamento delle osservazioni tramite clustering agglomerativo da cui risultano tre gruppi distinti evidenti dalla seguente figura.
+
+```{r clust 1, include=FALSE}
+distanze <- dist(data)
+clu <- hclust(distanze,method="complete") #legame completo viene meglio
+cluh <- cutree(clu,k=3)
+
+```
+
+
+```{r clust 2, fig.height=3}
+par(mfrow=c(1,3))
+matplot(t(data),col="gray",type="l",main="Gruppo 1")
+matlines(t(data[cluh==1,]),col=1,lwd=2,lty=1)
+matplot(t(data),col="gray",type="l",main="Gruppo 2")
+matlines(t(data[cluh==2,]),col=2,lwd=2,lty=1)
+matplot(t(data),col="gray",type="l",main="Gruppo 3")
+matlines(t(data[cluh==3,]),col=3,lwd=2,lty=1)
+```
+
+Il primo gruppo identificato si distingue per un andamento sostanzialmente stabile nelle prime tre fasi e da una dispersione nell'ultima fase. Nel secondo gruppo si nota un forte incremento della difettosità tra le fasi di Soaking e Assembly e da un assestamento in Cleaning. Infine il terzo gruppo è caratterizzato da una crescita costante del numero di pezzi difettosi attraverso tutto il processo. Questo gruppo comprende gran parte dei cicli che non mostravano un buon adattamento.
+Uno sviluppo futuro può essere quello di implementare un modello che nella stima dei coefficienti di regressione tenga conto della diversa natura delle osservazioni.
+
+
+
+# Parte 3 - Difettosità finale
+
+Un obiettivo secondario posto dagli ingegneri, ma importante, è quello di capire come sia possibile stimare la difettosità finale di un ciclo di produzione utilizzando la quarta ed ultima fase. Gli ingegneri, inoltre, si chiedevano se fosse più o meno opportuno usare solo il numero di difettosi dell'ultima fase o tutte 4 le misure. 
+La strategia da noi adottata è stata quella di utilizzare tutte e 4 le fasi: dal momento che si è in presenza di un campionamento casuale, costruire la metrica su tutte le 4 misure ci permette di utilizzare tutta l'informazione a disposizione, e di conseguenza ottenere una stima della metrica di interesse più precisa.
+
+
+## Variabile latente
+
+Per rispondere al quesito si è definita una modellazione basata su una variabile latente. Nello specifico, si assume che la distribuzione del numero di difettosi in ogni fase dipenda da una variabile latente (quindi non osservabile) comune per tutto il ciclo.
+Definiamo con $Z_i$ la variabile latente e con $Y_{i}=(Y_{ij})_{j=1,\dots,4}$ il numero di difettosi per il ciclo i-esimo e la fase j-esima. Il modello che ne consegue è il seguente:
+
+\[
+\begin{aligned}
+Z_i &\sim N(0,1) \\
+Y_{ij}|Z_i=z &\sim 
+\begin{cases}
+Bin(200, q_{jz}) \quad j=1,2\\
+BetaBin(200, q_{jz}, \phi_j) \quad j=3,4\\
+\end{cases} \\
+q_{jz} &= logit(\alpha_{j} +\beta z)
+\end{aligned}
+\]
+
+* si assume l'indipendenza da ciclo a ciclo e l'indipendenza condizionata da fase a fase data la variabile latente;
+* la relazione, definita dal coefficiente $beta$, della probabilità di difettosità con la variabile latente è la stessa per ogni fase, varia invece l'intercetta del predittore lineare. Secondo questa formulazione, ogni fase, avrà una probabilità di difettosità di base diversa (come dopotutto è auspicabile);
+* per la fase di Rolling e quella di Soaking si assume una distribuzione binomiale, mentre, per quanto visto nelle analisi precedenti, sembra più adatta una distribuzione beta-binomiale per le 2 fasi finali.
+* i parametri di dispersione $\phi_j$ vengono fissato a priori per questioni computazionali e posti pari alle stime ottenute tramite il metodo dei momenti.
+
+Per la stima del vettore $\theta = (\alpha_1,\alpha_2,\alpha_3,\alpha_4,\beta$) si è adottato un approccio di stima di massima verosimiglianza. 
+
+La distribuzione congiunta è:
+$$
+P(Z_i,Y_i) = P(Y_{i1}|Z_i=z) \dots P(Y_{i4}|Z_i=z)P(Z_i=z)
+$$
+Integrando $Z_i$ si ottiene la distribuzione marginale:
+$$
+P(Y_i) = \int P(Z_i,Y_i)dZ_i
+$$
+
+
+La funzione di log-verosimiglianza allora è:
+$$
+l(\theta; Y) = \sum_{i=1}^{1180}\log(P(Y_{i1},Y_{i2}, Y_{i3}, Y_{i4}; \theta))
+$$
+dalla cui massimizazione si ottengono le stime di $\theta$. La massimizzazione può avvenire secondo una qualche procedura numerica e nello specifico è stata utilizzata la funzione `nlminb` di _R_.
+
+```{r include=FALSE}
+library(knitr)
+library(VGAM)
+setwd("C:/Users/gianm/Desktop/University/Magistrale/2ndo anno/5-Statistica Iterazione/Progetto/Report")
+data <- read.table("AEC.dat", header=T)
+
+
+n <- 200
+m1 <- mean(data[,3])
+m2 <- mean(data[,3]^2)
+
+a <- (n*m1 - m2)/(n*(m2/m1 - m1 - 1) + m1)
+b <- (n-m1)*(n-m2/m1)/(n*(m2/m1-m1-1)+m1)
+
+(media3 <- n*a/(a+b))
+(rho3 <- 1/(a+b+1))
+
+m1 <- mean(data[,4])
+m2 <- mean(data[,4]^2)
+
+a <- (n*m1 - m2)/(n*(m2/m1 - m1 - 1) + m1)
+b <- (n-m1)*(n-m2/m1)/(n*(m2/m1-m1-1)+m1)
+
+(media4 <- n*a/(a+b))
+(rho4 <- 1/(a+b+1))
+(1 + rho4*(200-1))
+
+ptot <- function(z,y,theta)
+{
+  a1 <- exp(theta[1]+exp(theta[5])*z)
+  a2 <- exp(theta[2]+exp(theta[5])*z)
+  a3 <- exp(theta[3]+exp(theta[5])*z)
+  a4 <- exp(theta[4]+exp(theta[5])*z)
+  a1 <- a1/(1+a1)
+  a2 <- a2/(1+a2)
+  a3 <- a3/(1+a3)
+  a4 <- a4/(1+a4)
+  dbinom(y[1], 200, a1) * dbinom(y[2], 200, a2) *
+    dbetabinom(y[3], 200, a3, rho3) * dbetabinom(y[4], 200, a4, rho4)
+}
+
+s <- 1
+py <- function(theta, y) 
+{
+  integrate(function(z)
+    ptot(z,y,theta)*dnorm(z,0,s),
+    -100,100, subdivisions = 300)$value
+}
+
+nlogL <- function(data,theta) 
+{
+  -sum( apply(data, 1, function(y) log(py(theta, y))) )
+}
+
+load("latente2.RData")
+
+# library(lattice)
+# j <- 1
+z <- seq(-5,5,by=0.1)
+d <- dnorm(z,0,s)
+# v$par[5] <- exp(v$par[5])
+e1 <- exp(v2$par[1]+exp(v2$par[5])*z)
+e1 <- 200*e1/(1+e1)
+e2 <- exp(v2$par[2]+exp(v2$par[5])*z)
+e2 <- 200*e2/(1+e2)
+e3 <- exp(v2$par[3]+exp(v2$par[5])*z)
+e3 <- 200*e3/(1+e3)
+e4 <- exp(v2$par[4]+exp(v2$par[5])*z)
+e4 <- 200*e4/(1+e4)
+# xlim <-
+```
+
+## Risultati
+
+Nella figura seguente vengono riportati la distribuzione marginale di $Z$ e il valore atteso del numero di difettosi. La figura ci conferma quanto rilevato dalle analisi precedenti: fissata la variabile latente, il numero atteso di difettosi aumenta da fase a fase con un salto netto tra la fase di Soaking e quella di Assembly.
+
+```{r}
+opar <- par()
+par(mfrow=c(2,1), mar=c(0.5,1,0.2,0.2))
+curve(dnorm(x,0,s), xlim=c(-5,5), main="Distribuzione di Z", xlab="", ylab="")
+plot(z, e1, type="l", ylim=c(0,25), main="Numero atteso di difettosi dato Z",
+     ylab="", xlab="Z")
+lines(z, e2, type="l", col=2, ylim=c(0,30))
+lines(z, e3, type="l", col=3, ylim=c(0,30))
+lines(z, e4, type="l", col=4,  ylim=c(0,30))
+legend("topleft", c("1","2","3","4"), col=1:4, lty=1, title="Fase")
+par(mfrow=c(1,1))
+par <- opar
+```
+
+La componente di più interesse fornita da questa modellazione è quella riguardante la distribuzione a posteriori di $Z_i$. Si ottiene facilmente dall'equazione:
+$$
+P(Z_i|Y_i) = \frac{P(Y_{i1}|Z_i=z) \dots P(Y_{i4}|Z_i=z)P(Z=z)}{P(Y_i)}
+$$
+Osservando tale distribuzione, per ogni ciclo si ha un'indicazione della difettosità generale.
+
+Nella figura successiba viene rappresentata la distribuzione a posteriori della variabile latente per alcuni cicli. Nello specifico, sono stati selezionati 4 cicli con caratteristiche diverse:
+
+* il ciclo 72 presenta un numero di difettosi piccolo per tutte le fasi;
+* il ciclo 503 presenta un andamento  crescente;
+* il ciclo 195 è quello con il numero di difettosi più elevato nell'ultima fase;
+* il ciclo 17 presenta un numero molto elevato di difettosi nell'ultime due fasi.
+
+```{r}
+
+postz <- function(z, y, theta){
+  ptot(z, y, v2$par)*dnorm(z,0,s)/py(v2$par, y)
+}
+
+ppostz <- function(p, y, theta){
+  integrate(function(x) postz(x, y, v2$par), lower = -Inf, upper=p)$value
+}
+
+integ <- apply(data, 1, function(y) integrate(function(x) postz(x, y, v2$par), -Inf,Inf)$value)
+par(mar=c(2,4,0.5,0.5))
+i <- 72
+curve(postz(x, unlist(data[i,]), v2$par)/integ[i], xlim=c(-5,5), ylim=c(0,0.7),
+      ylab = "Denstity", xlab="Z")
+i <- 503
+curve(postz(x, unlist(data[i,]), v2$par)/integ[i], xlim=c(-5,5),
+      ylab = "Denstity", xlab="Z", add=TRUE, col=2)
+i <- 195
+curve(postz(x, unlist(data[i,]), v2$par)/integ[i], xlim=c(-5,5),
+      ylab = "Denstity", xlab="Z", add=TRUE, col=3)
+i <- 17
+curve(postz(x, unlist(data[i,]), v2$par)/integ[i], xlim=c(-5,5),
+      ylab = "Denstity", xlab="Z", add=TRUE, col=4)
+
+legend("topleft", c("72", "503", "195", "17"), col=1:4, lty=1, title="Ciclo")
+```
+
+Si può osservare come all'aumentare del numero di difettosi complessivo osservato la distribuzione si sposta verso destra, cioè verso valori di difettosità più elevati. Inoltre, la varianza tende a diminuire anche se in modo molto lieve. Da notare anche il fatto che il ciclo 17 abbia una distribuzione più a destra rispetto al ciclo 195 nonostante abbia un numero di difettosi per l'ultima fase molto minore. Questo deriva dal fatto che la distribuzione a posteriori, per costruzione, tiene conto di tutte e 4 le fasi e non solo dell'ultima come desiderato all'inizio di questa sezione.
+
+Nella tabella seguente vengono riportati i 4 cicli selezionati con le rispettive mode e quantili della distribuzione di interesse. Come esempio, si riporta anche il ciclo 73 a cui viene attribuita una moda molto alta. Questo perché presenta sia nella fase di Rolling che in quella di Soaking un numero di difettosi molto elevato e poco consono al processo.
+
+```{r}
+cicli <- c(72, 503, 195, 17, 73)
+stat <- matrix(NA, 5, 3)
+for (i in 1:5){
+  k <- which.max(postz(seq(-4,4,0.01), unlist(data[cicli[i],]), v2$par))
+  stat[i,1] <- seq(-4,4,0.01)[k]
+  stat[i,2] <- round(uniroot(function(x) ppostz(x, unlist(data[cicli[i],]), v2$par)/integ[cicli[i]] - 0.25, interval = c(-5,stat[i,1]))$root,3)
+  stat[i,3] <- round(uniroot(function(x) ppostz(x, unlist(data[cicli[i],]), v2$par)/integ[cicli[i]] - 0.75, interval = c(stat[i,1],10))$root,3)
+}
+
+colnames(stat) <- c("Moda", "25%", "75%")
+rownames(stat) <- NULL
+
+tab <- cbind(cicli,data[cicli,], stat)
+rownames(tab) <- NULL
+colnames(tab)[1] <- "Ciclo"
+tab$`25%` <-round(tab$`25%`, 2)
+tab$`75%` <-round(tab$`75%`, 2)
+
+kable(tab, "latex")
+library(xtable)
+xtable(tab)
+```
+
+## Limiti
+
+Il limite maggiore di questa modellazione è che assume la variabile latente costante per tutte le fasi. Di conseguenza, non coglie la dinamica mostrata dalle analisi precedenti per cui in alcuni cicli sembra esserci un cambio netto di difettosità dopo una o più fasi. Alcuni tentativi sono stati fatti in questa direzione ma non si è riuscito a formulare un algoritmo efficiente per la stima delle quantità di interesse.
+
+
+\newpage
+# Conclusioni 
+
+L'analisi effettuata ha consentito di confermare l'andamento monotono del rischio di difettosità, il quale infatti cresce ad ogni fase successiva
+nonostante l'eliminazione dei pezzi difettosi durante il processo, così come ipotizzato dagli ingegneri responsabili della produzione. 
+Si è potuto inoltre modellare la struttura di dipendenza tra le varie fasi, la quale si manifesta in una correlazione positiva del numero di pezzi difettosi
+di ogni ciclo, non solo con la fase immediatamente precedente, ma con tutte le altre. Il processo si caratterizza inoltre per una crescente
+dispersione, in particolare nel passaggio tra le fasi di Assembly e Cleaning, che la modellistica implementata non è in grado di cogliere appieno
+sfruttando l'informazione sulla difettosità delle fasi precedenti. Un'analisi ad hoc tramite clustering, mette in risalto la presenza di un 
+gruppo ben distinguibile che coincide in gran parte con le osservazioni che si discostano dal modello. Questo fornisce ulteriore evidenza 
+all'ipotesi secondo cui esistono fattori stocastici ignoti che affliggono i cicli di produzione.
+Il modello a variabile latente ha consentito di fornire una misura di difettosità finale dei cicli di produzione che considera tutte e 4 le fasi.
+Anche questa procedura conferma una marcata diversificazione dei vari cicli.
+
+\newpage
+
+# Appendice A: Materiale Supplementare
+## 1 - Individuazione di andamenti
+Per esplorare la presenza di comportamenti ricorrenti si sono rappresentati graficamente in totale 60 cicli di produzione, selezionati casualmente in base al numero di difettosi di una fase, e suddivisi nelle due seguenti situazioni:
+
+  1. il numero di difettosi è compreso tra 0 e la mediana della fase
+  2. il numero di difettosi è compreso tra la mediana e il massimo della fase
+
+Quindi per esempio prendendo la fase di _Soaking_, verranno estratti casualmente 60 cicli di produzione dove, in quella specifica fase, 30 avranno il numero di difettosi compreso tra 0 e la mediana e 30 con il numero di difettosi tra la mediana e il massimo. <br> 
+```{r Andamento Pochi/Molti tutte le fasi, fig.height=8, fig.pos='h'}
+set.seed(1)
+par(mfrow=c(2,1))
+
+
+## Fase 1 ##
+# Pochi #
+sub_data1 <- data[which(between(data[,1], 0, median(data[,1]))),]
+sub1 <- sample(1:nrow(sub_data1), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi bassi in ROLLING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data1[sub1,]), type = "l", lty=1, lwd=1)
+# Molti #
+sub_data1 <- data[which(between(data[,1], median(data[,1])+2, max(data[,1]))),]
+sub1 <- sample(1:nrow(sub_data1), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in ROLLING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data1[sub1,]), type = "l", lty=1, lwd=1)
+
+## Fase 2 ##
+# Pochi # 
+sub_data2 <- data[which(between(data[,2], 0, median(data[,2]))),]
+sub2 <- sample(1:nrow(sub_data2), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in SOAKING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data2[sub2,]), type = "l", lty=1, lwd=1)
+# Tanti #
+sub_data2 <- data[which(between(data[,2], median(data[,2])+2, max(data[,2]))),]
+sub2 <- sample(1:nrow(sub_data2), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in SOKING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data2[sub2,]), type = "l", lty=1, lwd=1)
+
+## Fase 3 ##
+# Pochi # 
+sub_data3 <- data[which(between(data[,3], 0, median(data[,3]))),]
+sub3 <- sample(1:nrow(sub_data3), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi bassi in ASSEMBLY")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data3[sub3,]), type = "l", lty=1, lwd=1)
+# Tanti #
+sub_data3 <- data[which(between(data[,3], median(data[,3])+6, max(data[,3]))),]
+sub3 <- sample(1:nrow(sub_data3), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in ASSEMBLY")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data3[sub3,]), type = "l", lty=1, lwd=1)
+
+## Fase 4 ##
+# Pochi # 
+sub_data4 <- data[which(between(data[,4], 0, median(data[,4]))),]
+sub4 <- sample(1:nrow(sub_data4), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in CLEANING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data4[sub4,]), type = "l", lty=1, lwd=1)
+
+# Tanti #
+sub_data4 <- data[which(between(data[,4], median(data[,4])+8, max(data[,4]))),]
+sub4 <- sample(1:nrow(sub_data4), 30)
+matplot(1:4, t(data), type = "l", lty = 1, col="grey", lwd=4, xaxt = "n", xlab="", ylab="difettosi",
+        main="Andamento di cicli casuali con difettosi alti in CLEANING")
+axis(1, at=1:4, labels = colnames(data))
+matlines(t(sub_data4[sub4,]), type = "l", lty=1, lwd=1)
+```
+
+## 2 - Summary del modello ANOVA
+```{r modelloanova}
+m.anova <- vglm(cbind(y,200-y) ~ Fase, family = betabinomial(zero=0), data=long.data)
+summary(m.anova)
+```
+
+
+## 3 - Summary & Grafici dei Modelli Beta-binomiali
+### Modello _m1_
+```{r m1 grafici}
+summary(m1.2)
+plot(m1.2)
+shapiro.test(resid(m1.2))
+```
+
+### Modello _m2_
+```{r m2 grafici}
+summary(m2.2)
+plot(m2.2)
+shapiro.test(resid(m2.2))
+```
+
+### Modello _m3_
+```{r m3 grafici}
+summary(m3.2)
+plot(m3.2)
+shapiro.test(resid(m3.2))
+```
+
+
+\newpage
+
+# Appendice B: Metodo dei momenti
+Nel seguito vengono riportate alcune proprietà della distribuzione Beta_binomiale utilizzata nei diversi modelli come distribuzione marginale del numero di difettosi nelle fase.
+Sia $X \sim BetaBin(n, \alpha, \beta)$:
+
+  * la funzione funzione di probabilità è:
+  $$
+  f_X(x|n, \alpha, \beta) = {n \choose x} \frac{B(x+\alpha. n-x+\beta)}{B(\alpha+\beta)}
+  $$
+  con $n \in N_0$, $\alpha>0$ e $\beta>0$.
+
+  * i primi due momenti sono rispettivamente:
+  $$
+  E[X] = n \frac{\alpha}{\alpha+\beta} \\
+  E[X^2] = \frac{n\alpha\beta(\alpha+\beta+n)}{(\alpha+\beta)^2(\alpha+\beta+1)}
+  $$
+ * una stima per $\alpha$ e $\beta$ si può ottenere con il metodo dei momenti:
+$$
+\hat\alpha = \frac{nm_1-m_2}{n(\frac{m_2}{m_1}-m_1+1)+m1} \\
+\hat\beta = \frac{(n-m1)(n-\frac{m_2}{m_1})}{n(\frac{m_2}{m_1}-m_1+1)+m1}
+$$
+dove $m_1$ e $m_2$ sono rispettivamente il primo e il secondo momento campionario.
+
+ * il parametro di dispersione si può ottenere come:
+ 
+$$
+\hat\rho = \frac{1}{1+\hat\alpha+\hat\beta}
+$$
+
+  * una distribuzione Beta Binomiale ha una varianza pari a $1+\hat\rho(n-1)$ volte quella di una distribuzione binomiale.
